@@ -10,6 +10,8 @@ set(TARGET_TIZEN_SENSOR_CLI tizen-sensor-cli)
 set(TARGET_TIZEN_WEB_SEARCH_CLI tizen-web-search-cli)
 set(TARGET_TIZEN_FILE_MANAGER_CLI tizen-file-manager-cli)
 set(TARGET_TIZEN_VCONF_CLI tizen-vconf-cli)
+set(TARGET_ROBOTIC_VACUUM_CLI robotic-vacuum-cli)
+set(TARGET_RVC_LOCAL_CLI rvc-local-cli)
 
 
 ### Dependencies ###
@@ -51,3 +53,5 @@ ADD_SUBDIRECTORY(tizen-hardware-control-cli)
 ADD_SUBDIRECTORY(tizen-sensor-cli)
 ADD_SUBDIRECTORY(tizen-sound-cli)
 ADD_SUBDIRECTORY(tizen-web-search-cli)
+ADD_SUBDIRECTORY(robotic-vacuum-cli)
+ADD_SUBDIRECTORY(rvc-local-cli)

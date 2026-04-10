@@ -20,6 +20,8 @@ CLI tools for the TizenClaw agent. All tools are installed under
 | [tizen-sound-cli](#tizen-sound-cli) | Sound | Get/set volume, list devices, play tones |
 | [tizen-vconf-cli](#tizen-vconf-cli) | Configuration | Read/write/watch vconf system settings |
 | [tizen-web-search-cli](#tizen-web-search-cli) | Web Search | Multi-engine web search (Naver, Google, Brave, Gemini, etc.) |
+| [robotic-vacuum-cli](#robotic-vacuum-cli) | Home Automation | Control Samsung Jet Bot robot vacuum via SmartThings |
+| [rvc-local-cli](#rvc-local-cli) | Home Automation | Direct on-device vacuum control via rvc_command (offline, no SmartThings) |
 
 ---
 
@@ -140,3 +142,29 @@ Multi-engine web search with AI and traditional search support.
 | Command | Description |
 |---------|-------------|
 | `--query <Q> [--engine <E>]` | Search the web. Engines: naver, google, brave, gemini, grok, kimi, perplexity |
+
+## robotic-vacuum-cli
+Control Samsung Jet Bot robot vacuum via SmartThings REST API. Credentials are
+read from `/opt/usr/share/tizenclaw/data/config/robotic_vacuum_config.json`.
+Requires internet and a valid SmartThings access token.
+
+| Command | Description |
+|---------|-------------|
+| `start [--mode auto\|part\|repeat\|manual\|map]` | Start cleaning in specified mode (default: auto) |
+| `stop` | Stop cleaning (movement → idle) |
+| `pause` | Pause current cleaning cycle |
+| `dock` | Return to charging dock (movement → homing) |
+| `status` | Get battery %, movement state, cleaning mode, turbo level |
+| `turbo [--level on\|off\|silence]` | Set suction power level (default: on) |
+
+## rvc-local-cli
+Direct on-device vacuum control using native `rvc_command`. No internet, no
+SmartThings, no tokens required. TizenClaw must be installed on the vacuum itself.
+
+| Command | Description |
+|---------|-------------|
+| `mapping` | Start room mapping (rvc_command 1) |
+| `clean-map` | Map and clean simultaneously (rvc_command 2) |
+| `cmd3` … `cmd15` | Placeholder commands — update tool.md when function is known |
+| `run --number <N>` | Run rvc_command N directly by number (1–15) |
+| `list` | Show all command numbers, names, and descriptions as JSON |
