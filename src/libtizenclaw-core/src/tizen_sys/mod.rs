@@ -32,22 +32,22 @@ static LIB_PKGMGR_INFO: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
         .or_else(|_| Library::new("libpkgmgr-info.so"))
         .ok()
 });
-// Tizen 7.0+ ships libglib-2.0 as a standalone library; soup 3.0 no longer
-// re-exports GLib symbols, so we must load them from libglib-2.0 directly.
+// libglib-2.0 is a standalone library on all supported Tizen versions.
+// Load it directly; never rely on LIB_SOUP to re-export GLib symbols.
 static LIB_GLIB: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
     Library::new("libglib-2.0.so.0")
         .or_else(|_| Library::new("libglib-2.0.so"))
         .ok()
 });
 // GObject (g_object_new / g_object_unref) lives in libgobject-2.0, which is
-// separate from libglib-2.0 on Tizen 7.0 and cannot be resolved via LIB_GLIB.
+// separate from libglib-2.0 and must not be resolved via LIB_GLIB.
 static LIB_GOBJECT: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
     Library::new("libgobject-2.0.so.0")
         .or_else(|_| Library::new("libgobject-2.0.so"))
         .ok()
 });
-// Tizen 7.0+ ships libsoup-3.0; probe it first, fall back to 2.4 for older
-// Tizen versions.
+// All Tizen versions (7.0–10.0) ship libsoup-2.4 only. Probe libsoup-3.0 first
+// for compatibility with non-Tizen Linux hosts (Ubuntu 22+, Fedora 40+).
 static LIB_SOUP: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
     Library::new("libsoup-3.0.so.0")
         .or_else(|_| Library::new("libsoup-3.0.so"))
@@ -259,12 +259,13 @@ pub mod tizen_core {
         )
     }
 
-    // ── Tizen 7.0+ additions ───────────────────────────────────────────────
+    // ── tizen-core extended API (not present in Tizen 7.0 public repos) ──────
+    // These symbols load via libloading and return -1 if libtizen-core.so is absent.
 
-    /// Opaque handle for a tizen-core channel object (Tizen 7.0+).
+    /// Opaque handle for a tizen-core channel object.
     pub type tizen_core_channel_object_h = *mut c_void;
 
-    /// Get the numeric ID of a task (Tizen 7.0+).
+    /// Get the numeric ID of a task.
     pub unsafe fn tizen_core_task_get_id(
         task: tizen_core_task_h,
         id: *mut c_int,
@@ -279,8 +280,7 @@ pub mod tizen_core {
         )
     }
 
-    /// Attach a channel object to a tizen_core instance for inter-task
-    /// communication (Tizen 7.0+).
+    /// Attach a channel object to a tizen_core instance for inter-task communication.
     pub unsafe fn tizen_core_add_channel_object(
         core: tizen_core_h,
         channel_object: tizen_core_channel_object_h,
@@ -629,8 +629,8 @@ pub mod pkgmgr_info {
 }
 
 // ─────────────────────────────────────────
-// GLib — Main loop (loaded from libglib-2.0 directly; Tizen 7.0+ requires
-// this because libsoup-3.0 no longer re-exports GLib symbols)
+// GLib — Main loop (loaded from libglib-2.0.so.0 directly).
+// Must not rely on LIB_SOUP to re-export GLib symbols.
 // ─────────────────────────────────────────
 pub mod glib {
     use super::*;
@@ -722,7 +722,8 @@ pub mod glib {
 
 // ─────────────────────────────────────────
 // libsoup — HTTP Server
-// Supports soup 3.0 (Tizen 7.0+, aarch64) and soup 2.4 (older Tizen).
+// Tizen 7.0/8.0/9.0/10.0 all ship libsoup-2.4 (version 2.72+).
+// soup 3.0 probe is for future compatibility on non-Tizen Linux hosts.
 // soup 3.0 breaking changes vs 2.4:
 //   • SoupMessage* → SoupServerMessage* in server callbacks
 //   • SoupServerCallback drops SoupClientContext* param (6→5 args)
@@ -748,13 +749,13 @@ pub mod soup {
     pub type SoupMessageBody = c_void;
     pub type GBytes = c_void;
 
-    /// Soup 2.4 server-side message type. On Tizen 7.0+ use SoupServerMessage.
+    /// Soup 2.4 server-side message type. Used on all current Tizen versions (7.0–10.0).
     pub type SoupMessage = c_void;
-    /// Soup 3.0 server-side message type (replaces SoupMessage in server callbacks).
+    /// Soup 3.0 server-side message type (non-Tizen Linux hosts with libsoup-3.0).
     pub type SoupServerMessage = c_void;
 
     /// Soup 2.4 server callback — 6 params including SoupClientContext.
-    /// Deprecated on Tizen 7.0+; external C plugins must migrate to SoupServerCallbackV3.
+    /// This is the correct type for all Tizen versions (7.0–10.0).
     pub type SoupServerCallback = unsafe extern "C" fn(
         *mut SoupServer,
         *mut SoupMessage,
@@ -765,7 +766,7 @@ pub mod soup {
     );
 
     /// Soup 3.0 server callback — 5 params, SoupServerMessage replaces SoupMessage.
-    /// Required for Tizen 7.0+ (aarch64).
+    /// Only applicable on non-Tizen Linux hosts that ship libsoup-3.0.
     pub type SoupServerCallbackV3 = unsafe extern "C" fn(
         *mut SoupServer,
         *mut SoupServerMessage,
@@ -779,7 +780,7 @@ pub mod soup {
 
     // ── GLib/GObject helpers ────────────────────────────────────────────────
     // GLib functions (g_main_*, g_bytes_*) → LIB_GLIB
-    // GObject functions (g_object_*) → LIB_GOBJECT (separate .so on Tizen 7.0)
+    // GObject functions (g_object_*) → LIB_GOBJECT (separate .so from GLib)
 
     pub unsafe fn g_object_unref(object: gpointer) {
         dlsym_call!(
@@ -917,7 +918,8 @@ pub mod soup {
     }
 
     /// Register a handler using the soup 2.4 callback type (6-param).
-    /// For Tizen 7.0+ (soup 3.0) use soup_server_add_handler_v3 instead.
+    /// Correct for all Tizen versions (7.0–10.0). Use soup_server_add_handler_v3
+    /// only on non-Tizen Linux hosts where libsoup-3.0 is present.
     pub unsafe fn soup_server_add_handler(
         server: *mut SoupServer,
         path: *const c_char,
@@ -944,7 +946,8 @@ pub mod soup {
         )
     }
 
-    /// Register a handler using the soup 3.0 callback type (5-param, Tizen 7.0+).
+    /// Register a handler using the soup 3.0 callback type (5-param).
+    /// Only for non-Tizen Linux hosts with libsoup-3.0; never called on Tizen.
     pub unsafe fn soup_server_add_handler_v3(
         server: *mut SoupServer,
         path: *const c_char,
@@ -997,10 +1000,11 @@ pub mod soup {
         )
     }
 
-    // ── Soup 2.4 only — will resolve to no-op on Tizen 7.0+ (soup 3.0) ────
+    // ── Soup 2.4 API — active on all Tizen versions (7.0–10.0) ───────────────
     //
-    // External C plugins still targeting older Tizen can call these; they will
-    // gracefully do nothing if the symbols are absent in soup 3.0.
+    // These resolve to no-op only on non-Tizen Linux hosts where libsoup-3.0
+    // is the default and soup_message_set_status / soup_message_set_response
+    // have been removed.
 
     /// Set HTTP status (soup 2.4). Removed in soup 3.0; use soup_server_message_set_status.
     pub unsafe fn soup_message_set_status(msg: *mut SoupMessage, status_code: guint) {
@@ -1036,7 +1040,7 @@ pub mod soup {
         )
     }
 
-    // ── Soup 3.0 API — Tizen 7.0+ (aarch64) ───────────────────────────────
+    // ── Soup 3.0 API — non-Tizen Linux hosts (libsoup-3.0) only ───────────
 
     /// Set the HTTP status code on a server-side message.
     /// reason_phrase may be null to use the standard phrase for the code.
