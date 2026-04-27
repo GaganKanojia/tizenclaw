@@ -1,0 +1,4 @@
+interface RVCTizenClawService {
+    void ResultCB(string sender, string result) delegate;
+    int SendCommand(string rvcCommand, int mode);
+}
