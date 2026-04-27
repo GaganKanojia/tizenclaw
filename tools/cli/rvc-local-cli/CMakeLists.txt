@@ -1,6 +1,9 @@
 AUX_SOURCE_DIRECTORY(${CMAKE_CURRENT_SOURCE_DIR}
   SRCS)
 
+LIST(APPEND SRCS
+  ${CMAKE_CURRENT_SOURCE_DIR}/tidl/rvc_local.cc)
+
 ADD_EXECUTABLE(${TARGET_RVC_LOCAL_CLI}
   ${SRCS})
 
@@ -11,8 +14,10 @@ SET_TARGET_PROPERTIES(
   ${TARGET_RVC_LOCAL_CLI}
   PROPERTIES LINK_FLAGS "-pie")
 
-# No external library dependencies — pure C++ stdlib + POSIX system().
-# APPLY_PKG_CONFIG is intentionally omitted.
+APPLY_PKG_CONFIG(${TARGET_RVC_LOCAL_CLI} REQUIRED
+  capi-rpc-port
+  bundle
+  dlog)
 
 SET(INSTALL_DIR
   "${APP_DATA_DIR}/tools/cli/${TARGET_RVC_LOCAL_CLI}")
