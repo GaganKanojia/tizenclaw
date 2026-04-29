@@ -16,7 +16,6 @@ BuildRequires:  cargo
 BuildRequires:  pkgconfig(dlog)
 BuildRequires:  pkgconfig(tizen-core)
 BuildRequires:  pkgconfig(glib-2.0)
-BuildRequires:  pkgconfig(gobject-2.0)
 BuildRequires:  pkgconfig(libsoup-2.4)
 BuildRequires:  pkgconfig(pkgmgr)
 BuildRequires:  pkgconfig(pkgmgr-info)
