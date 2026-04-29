@@ -5,8 +5,8 @@
 ## Subcommands
 | Subcommand | Description |
 |---|---|
-| `mapping` | Start room mapping only (vc_command 1 via TIDL) |
-| `clean-map` | Map and clean simultaneously (vc_command 2 via TIDL) |
+| `mapping` | Start room mapping only (rvc_command 1) |
+| `clean-map` | Map and clean simultaneously (rvc_command 2) |
 | `cmd3` | Command 3 — update description when function is discovered |
 | `cmd4` | Command 4 — update description when function is discovered |
 | `cmd5` | Command 5 — update description when function is discovered |

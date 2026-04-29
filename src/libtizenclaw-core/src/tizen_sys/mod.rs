@@ -32,6 +32,22 @@ static LIB_PKGMGR_INFO: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
         .or_else(|_| Library::new("libpkgmgr-info.so"))
         .ok()
 });
+// Tizen 7.0+ ships libglib-2.0 as a standalone library; soup 3.0 no longer
+// re-exports GLib symbols, so we must load them from libglib-2.0 directly.
+static LIB_GLIB: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
+    Library::new("libglib-2.0.so.0")
+        .or_else(|_| Library::new("libglib-2.0.so"))
+        .ok()
+});
+// GObject (g_object_new / g_object_unref) lives in libgobject-2.0, which is
+// separate from libglib-2.0 on Tizen 7.0 and cannot be resolved via LIB_GLIB.
+static LIB_GOBJECT: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
+    Library::new("libgobject-2.0.so.0")
+        .or_else(|_| Library::new("libgobject-2.0.so"))
+        .ok()
+});
+// Tizen 7.0+ ships libsoup-3.0; probe it first, fall back to 2.4 for older
+// Tizen versions.
 static LIB_SOUP: LazyLock<Option<Library>> = LazyLock::new(|| unsafe {
     Library::new("libsoup-2.4.so.1")
         .or_else(|_| Library::new("libsoup-2.4.so"))
@@ -238,6 +254,42 @@ pub mod tizen_core {
             callback,
             user_data,
             source
+        )
+    }
+
+    // ── Tizen 7.0+ additions ───────────────────────────────────────────────
+
+    /// Opaque handle for a tizen-core channel object (Tizen 7.0+).
+    pub type tizen_core_channel_object_h = *mut c_void;
+
+    /// Get the numeric ID of a task (Tizen 7.0+).
+    pub unsafe fn tizen_core_task_get_id(
+        task: tizen_core_task_h,
+        id: *mut c_int,
+    ) -> c_int {
+        dlsym_call!(
+            LIB_TIZEN_CORE,
+            b"tizen_core_task_get_id\0",
+            unsafe extern "C" fn(tizen_core_task_h, *mut c_int) -> c_int,
+            -1,
+            task,
+            id
+        )
+    }
+
+    /// Attach a channel object to a tizen_core instance for inter-task
+    /// communication (Tizen 7.0+).
+    pub unsafe fn tizen_core_add_channel_object(
+        core: tizen_core_h,
+        channel_object: tizen_core_channel_object_h,
+    ) -> c_int {
+        dlsym_call!(
+            LIB_TIZEN_CORE,
+            b"tizen_core_add_channel_object\0",
+            unsafe extern "C" fn(tizen_core_h, tizen_core_channel_object_h) -> c_int,
+            -1,
+            core,
+            channel_object
         )
     }
 }
@@ -570,7 +622,8 @@ pub mod pkgmgr_info {
 }
 
 // ─────────────────────────────────────────
-// GLib — Main loop (resolved via libsoup-2.4 which depends on libglib-2.0)
+// GLib — Main loop (loaded from libglib-2.0 directly; Tizen 7.0+ requires
+// this because libsoup-3.0 no longer re-exports GLib symbols)
 // ─────────────────────────────────────────
 pub mod glib {
     use super::*;
@@ -661,7 +714,14 @@ pub mod glib {
 }
 
 // ─────────────────────────────────────────
-// libsoup-2.4 — HTTP Server
+// libsoup — HTTP Server
+// Supports soup 3.0 (Tizen 7.0+, aarch64) and soup 2.4 (older Tizen).
+// soup 3.0 breaking changes vs 2.4:
+//   • SoupMessage* → SoupServerMessage* in server callbacks
+//   • SoupServerCallback drops SoupClientContext* param (6→5 args)
+//   • soup_message_set_status / soup_message_set_response removed
+//   • SOUP_MEMORY_COPY constant removed
+//   • GLib symbols no longer re-exported; loaded from LIB_GLIB instead
 // ─────────────────────────────────────────
 pub mod soup {
     use super::*;
@@ -679,7 +739,16 @@ pub mod soup {
     pub type SoupServer = c_void;
     pub type SoupMessage = c_void;
     pub type SoupMessageHeaders = c_void;
+    pub type SoupMessageBody = c_void;
+    pub type GBytes = c_void;
 
+    /// Soup 2.4 server-side message type. On Tizen 7.0+ use SoupServerMessage.
+    pub type SoupMessage = c_void;
+    /// Soup 3.0 server-side message type (replaces SoupMessage in server callbacks).
+    pub type SoupServerMessage = c_void;
+
+    /// Soup 2.4 server callback — 6 params including SoupClientContext.
+    /// Deprecated on Tizen 7.0+; external C plugins must migrate to SoupServerCallbackV3.
     pub type SoupServerCallback = unsafe extern "C" fn(
         *mut SoupServer,
         *mut SoupMessage,
@@ -689,7 +758,22 @@ pub mod soup {
         gpointer,
     );
 
+    /// Soup 3.0 server callback — 5 params, SoupServerMessage replaces SoupMessage.
+    /// Required for Tizen 7.0+ (aarch64).
+    pub type SoupServerCallbackV3 = unsafe extern "C" fn(
+        *mut SoupServer,
+        *mut SoupServerMessage,
+        *const c_char,  // path
+        *mut c_void,    // GHashTable* query
+        gpointer,       // user_data
+    );
+
+    /// Soup 2.4 only. Removed in soup 3.0 — use GBytes API instead.
     pub const SOUP_MEMORY_COPY: c_int = 1;
+
+    // ── GLib/GObject helpers ────────────────────────────────────────────────
+    // GLib functions (g_main_*, g_bytes_*) → LIB_GLIB
+    // GObject functions (g_object_*) → LIB_GOBJECT (separate .so on Tizen 7.0)
 
     pub unsafe fn g_object_unref(object: gpointer) {
         dlsym_call!(
@@ -802,6 +886,8 @@ pub mod soup {
         )
     }
 
+    /// Register a handler using the soup 2.4 callback type (6-param).
+    /// For Tizen 7.0+ (soup 3.0) use soup_server_add_handler_v3 instead.
     pub unsafe fn soup_server_add_handler(
         server: *mut SoupServer,
         path: *const c_char,
@@ -828,6 +914,33 @@ pub mod soup {
         )
     }
 
+    /// Register a handler using the soup 3.0 callback type (5-param, Tizen 7.0+).
+    pub unsafe fn soup_server_add_handler_v3(
+        server: *mut SoupServer,
+        path: *const c_char,
+        callback: SoupServerCallbackV3,
+        user_data: gpointer,
+        destroy: Option<unsafe extern "C" fn(gpointer)>,
+    ) {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_server_add_handler\0",
+            unsafe extern "C" fn(
+                *mut SoupServer,
+                *const c_char,
+                SoupServerCallbackV3,
+                gpointer,
+                Option<unsafe extern "C" fn(gpointer)>,
+            ),
+            (),
+            server,
+            path,
+            callback,
+            user_data,
+            destroy
+        )
+    }
+
     pub unsafe fn soup_server_disconnect(server: *mut SoupServer) {
         dlsym_call!(
             LIB_SOUP,
@@ -838,6 +951,28 @@ pub mod soup {
         )
     }
 
+    pub unsafe fn soup_message_headers_append(
+        hdrs: *mut SoupMessageHeaders,
+        name: *const c_char,
+        value: *const c_char,
+    ) {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_message_headers_append\0",
+            unsafe extern "C" fn(*mut SoupMessageHeaders, *const c_char, *const c_char),
+            (),
+            hdrs,
+            name,
+            value
+        )
+    }
+
+    // ── Soup 2.4 only — will resolve to no-op on Tizen 7.0+ (soup 3.0) ────
+    //
+    // External C plugins still targeting older Tizen can call these; they will
+    // gracefully do nothing if the symbols are absent in soup 3.0.
+
+    /// Set HTTP status (soup 2.4). Removed in soup 3.0; use soup_server_message_set_status.
     pub unsafe fn soup_message_set_status(msg: *mut SoupMessage, status_code: guint) {
         dlsym_call!(
             LIB_SOUP,
@@ -869,7 +1004,85 @@ pub mod soup {
         )
     }
 
-    pub unsafe fn soup_message_headers_append(
+    // ── Soup 3.0 API — Tizen 7.0+ (aarch64) ───────────────────────────────
+
+    /// Set the HTTP status code on a server-side message.
+    /// reason_phrase may be null to use the standard phrase for the code.
+    pub unsafe fn soup_server_message_set_status(
+        msg: *mut SoupServerMessage,
+        status_code: guint,
+        reason_phrase: *const c_char,
+    ) {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_server_message_set_status\0",
+            unsafe extern "C" fn(*mut SoupServerMessage, guint, *const c_char),
+            (),
+            msg,
+            status_code,
+            reason_phrase
+        )
+    }
+
+    /// Get the mutable response body of a server-side message.
+    /// Use with soup_message_body_append_bytes to write the response.
+    pub unsafe fn soup_server_message_get_response_body(
+        msg: *mut SoupServerMessage,
+    ) -> *mut SoupMessageBody {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_server_message_get_response_body\0",
+            unsafe extern "C" fn(*mut SoupServerMessage) -> *mut SoupMessageBody,
+            std::ptr::null_mut(),
+            msg
+        )
+    }
+
+    /// Get the mutable response headers of a server-side message.
+    pub unsafe fn soup_server_message_get_response_headers(
+        msg: *mut SoupServerMessage,
+    ) -> *mut SoupMessageHeaders {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_server_message_get_response_headers\0",
+            unsafe extern "C" fn(*mut SoupServerMessage) -> *mut SoupMessageHeaders,
+            std::ptr::null_mut(),
+            msg
+        )
+    }
+
+    /// Get the request headers of a server-side message.
+    pub unsafe fn soup_server_message_get_request_headers(
+        msg: *mut SoupServerMessage,
+    ) -> *mut SoupMessageHeaders {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_server_message_get_request_headers\0",
+            unsafe extern "C" fn(*mut SoupServerMessage) -> *mut SoupMessageHeaders,
+            std::ptr::null_mut(),
+            msg
+        )
+    }
+
+    /// Append a GBytes buffer to a message body.
+    /// Typical usage: g_bytes_new → soup_message_body_append_bytes → g_bytes_unref.
+    pub unsafe fn soup_message_body_append_bytes(
+        body: *mut SoupMessageBody,
+        bytes: *mut GBytes,
+    ) {
+        dlsym_call!(
+            LIB_SOUP,
+            b"soup_message_body_append_bytes\0",
+            unsafe extern "C" fn(*mut SoupMessageBody, *mut GBytes),
+            (),
+            body,
+            bytes
+        )
+    }
+
+    /// Set the Content-Type header on a SoupMessageHeaders object.
+    /// params should be null for simple content types (e.g. "application/json").
+    pub unsafe fn soup_message_headers_set_content_type(
         hdrs: *mut SoupMessageHeaders,
         name: *const c_char,
         value: *const c_char,
